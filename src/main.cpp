@@ -152,13 +152,12 @@ int main() {
 	//Once everything is copied into c++ data structures we can free the memory allocated by the loader.
 	mnist::deinit();
 	rng.seed(std::chrono::system_clock::now().time_since_epoch().count());
-	std::cout << test_data.size() << std::endl;
 
 	Network<3> network({28*28, 30, 10});
-	network.stochastic_gradient_descent(training_data, 10, 3, 2);
+	network.stochastic_gradient_descent(training_data, 10, 3, 30);
 
 	int good = 0;
-	for (int i = 0; i < test_data.size(); i++) {
+	for (size_t i = 0; i < test_data.size(); i++) {
 		auto output = network.feedforward(test_data[i].first);
 		int max = 0;
 		for (int r = 0; r < 10; r++) {
