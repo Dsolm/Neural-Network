@@ -30,12 +30,9 @@ class Network {
 			return input;	
 		};
 
-		//We need to copy the training_data vector in order to shuffle it,
-		//but that is not a performance problem because this function will only be run once.
-		void stochastic_gradient_descent(std::vector<std::pair<MatrixXd, MatrixXd>> training_data, const int mini_batch_size, const double eta, const int epochs) {
+		void stochastic_gradient_descent(std::vector<std::pair<MatrixXd, MatrixXd>>&& training_data, const int mini_batch_size, const double eta, const int epochs) {
 			int n_mini_batches = training_data.size() / mini_batch_size;
-			std::cout << "N_MINI_BATCHES: " << n_mini_batches << '\n';
-			double learning_rate =  eta/mini_batch_size;
+			double learning_rate = eta/mini_batch_size;
 			for (int epoch = 0; epoch < epochs; epoch++) {
 				std::shuffle(training_data.begin(), training_data.end(), rng);
 
@@ -56,7 +53,6 @@ class Network {
 					}
 
 					for (const auto& [data, expected_output] : mini_batch) {
-
 						std::array<MatrixXd, Size> weighted_sums;
 						std::array<MatrixXd, Size> outputs;
 
@@ -102,10 +98,7 @@ class Network {
 };
 
 
-int main() {
-	//test();
-	//return 0;
-	
+int main(int argc, char** argv) {
 	mnist::load();
 	double** test_images_ptr;
 	int n_test_images;
@@ -153,8 +146,10 @@ int main() {
 	mnist::deinit();
 	rng.seed(std::chrono::system_clock::now().time_since_epoch().count());
 
+	std::this_thread::sleep_for(std::chrono::seconds(10));
+
 	Network<3> network({28*28, 30, 10});
-	network.stochastic_gradient_descent(training_data, 10, 3, 30);
+	network.stochastic_gradient_descent(std::move(training_data), 10, 3,30);
 
 	int good = 0;
 	for (size_t i = 0; i < test_data.size(); i++) {
@@ -167,8 +162,25 @@ int main() {
 		}
 		if (max == test_labels_ptr[i]) {
 			good += 1;
-		//	std::cout << "It's " << max << "\n";
 		}
 	}
 	std::cout << "Acurracy: " << (static_cast<double>(good)/test_data.size())*100 << "%" << std::endl;
+	if (argc > 1) {
+		std::array<double, 28*28> image;
+		std::ifstream file (argv[1], std::ios::binary);
+		file.read((char *)image.data(), sizeof(double) * image.size());
+
+		MatrixXd image_vector(28*28,1);
+		for (int i = 0; i < 28*28; i++) {
+				image_vector(i,0) = image[i];
+		}
+		auto output = network.feedforward(image_vector);
+		int max = 0;
+		for (int r = 0; r < 10; r++) {
+			if (output(r,0) > output(max,0)) {
+				max = r;
+			}
+		}
+		std::cout << "Input image is: " << max << std::endl;
+	}
 }
