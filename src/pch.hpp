@@ -7,6 +7,7 @@
 #include <random>
 #include <thread>
 #include <fstream>
+#include <mutex>
 
 #include <eigen3/Eigen/Dense>
 

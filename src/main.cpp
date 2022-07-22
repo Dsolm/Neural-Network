@@ -30,7 +30,8 @@ class Network {
 			return input;	
 		};
 
-		void stochastic_gradient_descent(std::vector<std::pair<MatrixXd, MatrixXd>>&& training_data, const int mini_batch_size, const double eta, const int epochs) {
+		//maybe pass it by reference and use a mutex when shuffling if we want to save memory.
+		void stochastic_gradient_descent(std::span<std::pair<MatrixXd, MatrixXd>> training_data, const int mini_batch_size, const double eta, const int epochs) {
 			int n_mini_batches = training_data.size() / mini_batch_size;
 			double learning_rate = eta/mini_batch_size;
 			for (int epoch = 0; epoch < epochs; epoch++) {
@@ -60,7 +61,10 @@ class Network {
 						//Feedforward
 						MatrixXd output = data;
 						for (int l = 1; l < Size; l++) {
+//							std::cout << "Output cols: " << output.cols() << "rows: " << output.rows() << "\n";
+//							std::cout << "Weights cols: " << weights[l].cols() << "rows: " << weights[l].rows() << "\n";
 							MatrixXd weighted_sum = (weights[l] * output) + bias[l];
+
 							weighted_sums[l] = weighted_sum;
 							output = sigmoid(weighted_sum);	
 							outputs[l] = output;
@@ -85,14 +89,17 @@ class Network {
 						}
 					}
 
+					m_mutex.lock();
 					for (int l = 1; l < Size; l++) {
 						weights[l] = weights[l] - learning_rate * total_change_weights[l]; 
 						bias[l] = bias[l] - learning_rate * total_change_bias[l];
 					}
+					m_mutex.unlock();
 				}
 			}
 		}
 
+		std::mutex m_mutex;
 		std::array<MatrixXd, Size> weights;
 		std::array<MatrixXd, Size> bias;
 };
@@ -146,10 +153,24 @@ int main(int argc, char** argv) {
 	mnist::deinit();
 	rng.seed(std::chrono::system_clock::now().time_since_epoch().count());
 
-	std::this_thread::sleep_for(std::chrono::seconds(10));
-
 	Network<3> network({28*28, 30, 10});
-	network.stochastic_gradient_descent(std::move(training_data), 10, 3,30);
+	//network.stochastic_gradient_descent(std::move(training_data), 10, 3,30);
+	auto nthreads = std::thread::hardware_concurrency();
+	//What if the thread number is odd?
+	
+	std::vector<std::thread> threads;
+	size_t slice_size = training_data.size() / nthreads;
+	for (size_t i = 0; i < nthreads; i++) {
+		std::span<std::pair<MatrixXd, MatrixXd>, std::dynamic_extent> training_data_slice(training_data.begin() + (i*slice_size), slice_size);
+		threads.emplace_back([&network, training_data_slice]() {
+					network.stochastic_gradient_descent(training_data_slice, 10, 3, 30);	
+				});
+	}
+
+	for (auto& thread : threads) {
+		thread.join();
+	}
+ 
 
 	int good = 0;
 	for (size_t i = 0; i < test_data.size(); i++) {
@@ -164,6 +185,8 @@ int main(int argc, char** argv) {
 			good += 1;
 		}
 	}
+
+
 	std::cout << "Acurracy: " << (static_cast<double>(good)/test_data.size())*100 << "%" << std::endl;
 	if (argc > 1) {
 		std::array<double, 28*28> image;
