@@ -9,3 +9,6 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O2")
 file(GLOB sources "src/*.cpp" "src/*.c")
 
 add_executable(neuralnetwork ${sources})
+target_link_libraries( neuralnetwork PUBLIC
+	pthread
+)
