@@ -9,7 +9,7 @@
 #include <fstream>
 #include <mutex>
 
-#include <eigen3/Eigen/Dense>
+#include "eigen3/Eigen/Dense"
 
 namespace mnist {
 	extern "C" {
