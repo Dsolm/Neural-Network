@@ -15,5 +15,5 @@ namespace mnist {
 	extern "C" {
 		#include "loader.h"
 	}
-};
+}
 
