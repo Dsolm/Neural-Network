@@ -8,6 +8,8 @@
 #include <thread>
 #include <fstream>
 #include <mutex>
+#include <filesystem>
+#include <cstddef>
 
 #include "eigen3/Eigen"
 
