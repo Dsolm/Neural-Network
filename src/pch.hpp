@@ -12,10 +12,3 @@
 #include <cstddef>
 
 #include "eigen3/Eigen"
-
-namespace mnist {
-	extern "C" {
-		#include "loader.h"
-	}
-}
-

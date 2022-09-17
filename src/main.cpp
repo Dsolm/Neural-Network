@@ -1,6 +1,5 @@
 #include "pch.hpp"
 #include <filesystem>
-
 #include <nlohmann/json.hpp>
 
 using Eigen::MatrixXd;
@@ -184,68 +183,86 @@ class Network {
 		std::array<MatrixXd, Size> bias;
 };
 
+std::vector<MatrixXd> load_labels() {
+	const char* path = "labels.txt";
+	std::ifstream file(path);
+	if (!file) {
+		throw std::runtime_error("labels file not found");
+	}
+	std::vector<MatrixXd> labels;
+	labels.reserve(376);
+	for (double token; file >> token;) {
+		MatrixXd tmp(1,1);
+		tmp(0,0) = token;
+		labels.push_back(tmp);
+	}
+	return labels;
+}
+#include <sstream>
+constexpr int entries_per_input_vector = 351;
+std::vector<MatrixXd> load_input_vectors(const std::string& path) {
+	std::ifstream file(path);
+	if (!file) {
+		throw std::runtime_error("file not found: " + path);
+	}
+	std::vector<MatrixXd> output;
+	output.reserve(376);
+	for (int i = 0; i < 376; i++) {
+		output.emplace_back(entries_per_input_vector, 1);
+	}
+	int matrix = 0;
+	for (std::string line; std::getline(file, line);) {
+		std::istringstream iss(line);
+		int row = 0;
+		for (double value; iss >> value;) {
+			output[matrix](row, 0) = value;
+			row++;
+		}
+		matrix++;
+	}
+	return output;
+}
+std::vector<MatrixXd> load_input_vectors();
+std::vector<std::pair<MatrixXd, MatrixXd>> load_data() {
+	auto labels = load_labels();
+	auto tfbs = load_input_vectors("tfbs.txt");
+	auto def_energies = load_input_vectors("def_energy.txt");
 
+	std::vector<std::pair<MatrixXd, MatrixXd>> result;
+	result.reserve(376);
+	for (int i = 0; i < 376; i++) {
+	//	output.push_back(std::pair<MatrixXd, MatrixXd>(MatrixXd(entries_per_input_vector*2,1),MatrixXd(1,1)));
+		MatrixXd first(entries_per_input_vector*2, 1);
+		for (int j = 0; j < entries_per_input_vector; j++) {
+			first(j,0) = tfbs[i](j,0);
+		}
+		for (int j = 0; j < entries_per_input_vector; j++) {
+			first(j+entries_per_input_vector,0) = def_energies[i](j,0);
+		}
+		result.push_back(std::pair<MatrixXd, MatrixXd>(first,labels[i]));
+	}
+	return result;
+}
 int main(int argc, char** argv) {
 	std::string output_path = "output.json";
 	//Load training and testing data
-	mnist::load();
-	double** test_images_ptr;
-	int n_test_images;
-	mnist::get_test_images(&test_images_ptr, &n_test_images, nullptr);
-
-	double** train_images_ptr;
-	int n_train_images;
-	mnist::get_train_images(&train_images_ptr, &n_train_images, nullptr);
-
-	int* train_labels_ptr;
-	int n_train_labels;
-	mnist::get_train_labels(&train_labels_ptr, &n_train_labels);
-
-	int* test_labels_ptr;
-	int n_test_labels;
-	mnist::get_test_labels(&test_labels_ptr, &n_test_labels);
-
-	std::vector<std::pair<MatrixXd, MatrixXd>> training_data;
-	training_data.reserve(n_train_images);
-
-	std::vector<std::pair<MatrixXd, MatrixXd>> test_data;
-	test_data.reserve(n_test_images);
-
-
-	for (int i = 0; i < n_test_images; i++) {
-		MatrixXd image(28*28,1);
-		for (int j = 0; j < 28*28; j++) {
-				image(j, 0) = test_images_ptr[i][j];
-		}
-		MatrixXd expected_output = MatrixXd::Zero(10,1);
-		expected_output(test_labels_ptr[i],0) = 1; 
-		test_data.emplace_back(image, expected_output);
-	}
-
-	for (int i = 0; i < n_train_images; i++) {
-		MatrixXd image(28*28,1);
-		for (int j = 0; j < 28*28; j++) {
-			image(j, 0) = train_images_ptr[i][j];
-		}
-		MatrixXd expected_output = MatrixXd::Zero(10,1);
-		expected_output(train_labels_ptr[i],0) = 1; 
-		training_data.emplace_back(image, expected_output);
-	}
-
-	//Once everything is copied into c++ data structures we can free the memory allocated by the loader.
-	//Train the network using several cpu threads.
-	mnist::deinit();
+	auto whole_data = load_data();
+	using vec_label = std::pair<MatrixXd, MatrixXd>;
 
 	rng.seed(std::chrono::system_clock::now().time_since_epoch().count());
+	std::shuffle(whole_data.begin(), whole_data.end(), rng);
+	std::span<vec_label, std::dynamic_extent> training_data(&whole_data.front(), &whole_data[((whole_data.size()*3) / 4)]);
+	std::span<vec_label, std::dynamic_extent> testing_data(&whole_data[((whole_data.size()*3) / 4)], &whole_data.back());
 
-	Network<3> network({28*28, 30, 10});
+	Network<3> network({entries_per_input_vector*2, 30, 1});
 
 	if (argc == 1) {
-		std::cout << "Invalid arguments: neuralnetwork <path_to_network_dump>/train (--image path) (--output path)" << std::endl;
+		std::cout << "Invalid arguments: neuralnetwork <path_to_network_dump>/train (--output path)" << std::endl;
 		return 1;
 	}
 	if (std::string(argv[1]) == "train") {
-		auto nthreads = std::thread::hardware_concurrency();
+		//auto nthreads = std::thread::hardware_concurrency();
+		size_t nthreads = 6;
 		
 		std::vector<std::thread> threads;
 		size_t slice_size = training_data.size() / nthreads;
@@ -268,53 +285,18 @@ int main(int argc, char** argv) {
 		}
 		network.deserialize(path.string());
 	}
-
-	for (int argn = 2; argn < argc; argn++) {
-		if(std::string(argv[argn]) == "--image") {
-			std::array<double, 28*28> image;
-			std::ifstream file (argv[argn+1], std::ios::binary);
-			if (file.bad()) {
-				std::cout << "File: " << argv[argn+1] << " not found." << '\n';
-				return 1;
-			}
-			file.read((char *)image.data(), sizeof(double) * image.size());
-
-			MatrixXd image_vector(28*28,1);
-			for (int i = 0; i < 28*28; i++) {
-					image_vector(i,0) = image[i];
-			}
-			auto output = network.feedforward(image_vector);
-			int max = 0;
-			for (int r = 0; r < 10; r++) {
-				if (output(r,0) > output(max,0)) {
-					max = r;
-				}
-			}
-			std::cout << "Input image is: " << max << std::endl;
-			argn += 1;
-		}
-		else if (std::string(argv[argn]) == "--output") {
-			output_path = argv[argn+1];
-		}
-	}
-	
 	/////////////////////////////////////////////////////////
 	//Test the network./////////////////////////////////////
 	int good = 0;
-	for (size_t i = 0; i < test_data.size(); i++) {
-		auto output = network.feedforward(test_data[i].first);
-		int max = 0;
-		for (int r = 0; r < 10; r++) {
-			if (output(r,0) > output(max,0)) {
-				max = r;
-			}
-		}
-		if (max == test_labels_ptr[i]) {
+	for (size_t i = 0; i < testing_data.size(); i++) {
+		auto output = network.feedforward(testing_data[i].first);
+		std::cout << std::round(output(0,0)) << " | " << testing_data[i].second(0,0) << '\n';
+		if (std::round(output(0,0)) == testing_data[i].second(0,0)) {
 			good += 1;
 		}
 	}
 
-	std::cout << "Acurracy: " << (static_cast<double>(good)/test_data.size())*100 << "%" << std::endl;
+	std::cout << "Acurracy: " << (static_cast<double>(good)/testing_data.size())*100 << "%" << std::endl;
 	//If we have supplied the path to an image as a command line argument, use it as testing data as well./// 
 	network.serialize(output_path);
 }
