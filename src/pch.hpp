@@ -1,5 +1,3 @@
-#pragma once
-
 #include <span>
 #include <chrono>
 #include <vector>
@@ -12,3 +10,6 @@
 #include <cstddef>
 
 #include "eigen3/Eigen"
+
+#include "nlohmann/json.hpp"
+#include <sstream>

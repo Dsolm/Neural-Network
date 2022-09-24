@@ -1,16 +1,14 @@
 #include "pch.hpp"
-#include <filesystem>
-#include <nlohmann/json.hpp>
 
 using Eigen::MatrixXd;
 
 auto rng = std::default_random_engine();
 
-auto sigmoid(const auto& z) {
+auto sigmoid(const MatrixXd& z) {
 	return 1.0/(1.0+Eigen::exp((-z).array()));
 }
 
-auto sigmoid_prime(const auto& z) {
+auto sigmoid_prime(const MatrixXd& z) {
 	return sigmoid(z).array() * (1-sigmoid(z).array());
 }
 
@@ -183,61 +181,87 @@ class Network {
 		std::array<MatrixXd, Size> bias;
 };
 
-std::vector<MatrixXd> load_labels() {
-	const char* path = "labels.txt";
+std::vector<MatrixXd> load_labels(const std::string& path) {
 	std::ifstream file(path);
 	if (!file) {
 		throw std::runtime_error("labels file not found");
 	}
-	std::vector<MatrixXd> labels;
-	labels.reserve(376);
+	std::vector<double> _labels;
 	for (double token; file >> token;) {
+		_labels.push_back(token);
+	}
+	std::vector<MatrixXd> labels;
+	labels.reserve(_labels.size());
+	for (size_t i = 0; i < _labels.size(); i++) {
 		MatrixXd tmp(1,1);
-		tmp(0,0) = token;
+		tmp(0,0) = _labels[i];
 		labels.push_back(tmp);
 	}
 	return labels;
 }
-#include <sstream>
-constexpr int entries_per_input_vector = 351;
 std::vector<MatrixXd> load_input_vectors(const std::string& path) {
 	std::ifstream file(path);
 	if (!file) {
 		throw std::runtime_error("file not found: " + path);
 	}
-	std::vector<MatrixXd> output;
-	output.reserve(376);
-	for (int i = 0; i < 376; i++) {
-		output.emplace_back(entries_per_input_vector, 1);
-	}
-	int matrix = 0;
+	size_t known_size = 0;
+	std::vector<std::vector<double>> vectors;
 	for (std::string line; std::getline(file, line);) {
 		std::istringstream iss(line);
-		int row = 0;
-		for (double value; iss >> value;) {
-			output[matrix](row, 0) = value;
-			row++;
+		size_t row = 0;
+		std::vector<double> value_vector;
+		if (known_size) {
+			value_vector.resize(known_size);
+			for (double value; iss >> value;) {
+				value_vector[row] = value;
+				//output[matrix](row, 0) = value;
+				row++;
+			}
 		}
-		matrix++;
+		else {
+			for (double value; iss >> value;) {
+				value_vector.push_back(value);
+				//output[matrix](row, 0) = value;
+				row++;
+			}
+			known_size = value_vector.size();
+		}
+		assert(row == known_size);
+		vectors.push_back(value_vector);
+	}
+	std::vector<MatrixXd> output;
+	output.reserve(vectors.size());
+	for (size_t i = 0; i < vectors.size(); i++) {
+		output.emplace_back(known_size, 1);
+		for (size_t j = 0; j < known_size; j++) {
+			output[i](j,0) = vectors[i][j];
+		}
 	}
 	return output;
 }
+
 std::vector<MatrixXd> load_input_vectors();
 std::vector<std::pair<MatrixXd, MatrixXd>> load_data() {
-	auto labels = load_labels();
-	auto tfbs = load_input_vectors("tfbs.txt");
-	auto def_energies = load_input_vectors("def_energy.txt");
+	auto labels = load_labels("data/all_labels.txt");
+	//hi ha un balanç correcte
+	auto tfbs = load_input_vectors("data/all_tfbs.txt");
+	auto def_energies = load_input_vectors("data/all_def_energy.txt");
+
+	assert(tfbs.size() == def_energies.size());
+	assert(labels.size() == tfbs.size());
+	assert(tfbs[0].rows() == def_energies[0].rows());
 
 	std::vector<std::pair<MatrixXd, MatrixXd>> result;
-	result.reserve(376);
-	for (int i = 0; i < 376; i++) {
+	result.reserve(tfbs.size());
+	for (size_t i = 0; i < tfbs.size(); i++) {
 	//	output.push_back(std::pair<MatrixXd, MatrixXd>(MatrixXd(entries_per_input_vector*2,1),MatrixXd(1,1)));
-		MatrixXd first(entries_per_input_vector*2, 1);
-		for (int j = 0; j < entries_per_input_vector; j++) {
+		MatrixXd first(def_energies[0].rows() + tfbs[0].rows(), 1);
+		//Mix descriptors
+		for (long int j = 0; j < tfbs[0].rows(); j++) {
 			first(j,0) = tfbs[i](j,0);
 		}
-		for (int j = 0; j < entries_per_input_vector; j++) {
-			first(j+entries_per_input_vector,0) = def_energies[i](j,0);
+		for (long int j = 0; j < def_energies[0].rows(); j++) {
+			first(j+tfbs[0].rows(),0) = def_energies[i](j,0);
 		}
 		result.push_back(std::pair<MatrixXd, MatrixXd>(first,labels[i]));
 	}
@@ -254,7 +278,8 @@ int main(int argc, char** argv) {
 	std::span<vec_label, std::dynamic_extent> training_data(&whole_data.front(), &whole_data[((whole_data.size()*3) / 4)]);
 	std::span<vec_label, std::dynamic_extent> testing_data(&whole_data[((whole_data.size()*3) / 4)], &whole_data.back());
 
-	Network<3> network({entries_per_input_vector*2, 30, 1});
+	int n_input_rows = whole_data[0].first.rows();
+	Network<3> network({n_input_rows, 30, 1});
 
 	if (argc == 1) {
 		std::cout << "Invalid arguments: neuralnetwork <path_to_network_dump>/train (--output path)" << std::endl;
@@ -269,7 +294,10 @@ int main(int argc, char** argv) {
 		for (size_t i = 0; i < nthreads; i++) {
 			std::span<std::pair<MatrixXd, MatrixXd>, std::dynamic_extent> training_data_slice(training_data.begin() + (i*slice_size), slice_size);
 			threads.emplace_back([&network, training_data_slice]() {
-						network.stochastic_gradient_descent(training_data_slice, 10, 3, 30);	
+						network.stochastic_gradient_descent(training_data_slice, 10, 3, 30);
+						//passar-se el mínim
+						//learning rate massa gran
+						//fer proves
 					});
 		}
 		for (auto& thread : threads) {
@@ -300,3 +328,5 @@ int main(int argc, char** argv) {
 	//If we have supplied the path to an image as a command line argument, use it as testing data as well./// 
 	network.serialize(output_path);
 }
+
+//Confusion matrix
