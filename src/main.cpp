@@ -1,205 +1,19 @@
 #include "pch.hpp"
+#include "Network.hpp"
 
-using Eigen::MatrixXd;
-
-auto rng = std::default_random_engine();
-
-auto sigmoid(const MatrixXd& z) {
-	return 1.0/(1.0+Eigen::exp((-z).array()));
-}
-
-auto sigmoid_prime(const MatrixXd& z) {
-	return sigmoid(z).array() * (1-sigmoid(z).array());
-}
-
-
-template <int Size>
-class Network {
-	public:
-		Network(const std::array<int, Size>& sizes) {
-			for (size_t i = 1; i < Size; i++) {
-				weights[i] = MatrixXd::Random(sizes[i], sizes[i-1]);
-				bias[i] = MatrixXd::Random(sizes[i], 1);
-			}
-		}
-
-		MatrixXd feedforward(MatrixXd input) {
-			for (int l = 1; l < Size; l++) {
-				input = sigmoid((weights[l] * input) + bias[l]);	
-			}
-			return input;	
-		};
-
-		//maybe pass it by reference and use a mutex when shuffling if we want to save memory.
-		void stochastic_gradient_descent(std::span<std::pair<MatrixXd, MatrixXd>> training_data, const int mini_batch_size, const double eta, const int epochs) {
-			int n_mini_batches = training_data.size() / mini_batch_size;
-			double learning_rate = eta/mini_batch_size;
-			for (int epoch = 0; epoch < epochs; epoch++) {
-				std::shuffle(training_data.begin(), training_data.end(), rng);
-
-				for (int mini_batch_id = 0; mini_batch_id < n_mini_batches; mini_batch_id++) {
-					//A span is like a non-owning slice of a list. It's a view into a list or some part of it.
-					const std::span<std::pair<MatrixXd, MatrixXd>> mini_batch(
-							training_data.begin() + mini_batch_size*mini_batch_id,
-							training_data.begin() + mini_batch_size * (mini_batch_id+1)
-					);
-					
-					std::array<MatrixXd, Size> total_change_bias;
-					std::array<MatrixXd, Size> total_change_weights;
-					for (int i = 1; i < Size; i++) {
-						total_change_weights[i].resizeLike(weights[i]);
-						total_change_weights[i].fill(0);
-						total_change_bias[i].resizeLike(bias[i]);
-						total_change_bias[i].fill(0);
-					}
-
-					for (const auto& [data, expected_output] : mini_batch) {
-						std::array<MatrixXd, Size> weighted_sums;
-						std::array<MatrixXd, Size> outputs;
-
-						outputs[0] = data;
-						//Feedforward
-						MatrixXd output = data;
-						for (int l = 1; l < Size; l++) {
-//							std::cout << "Output cols: " << output.cols() << "rows: " << output.rows() << "\n";
-//							std::cout << "Weights cols: " << weights[l].cols() << "rows: " << weights[l].rows() << "\n";
-							MatrixXd weighted_sum = (weights[l] * output) + bias[l];
-
-							weighted_sums[l] = weighted_sum;
-							output = sigmoid(weighted_sum);	
-							outputs[l] = output;
-						}
-
-						std::array<MatrixXd, Size> errors;
-
-						//.array() is the type used for performing vectorized operations.
-						errors.back() = (output - expected_output).array() * sigmoid_prime(weighted_sums.back()).array();	
-
-						
-						total_change_bias.back() = total_change_bias.back() + errors.back();
-						total_change_weights.back() = total_change_weights.back() +
-							errors.back() * (outputs[Size-2].transpose());
-
-						for (int l = Size - 2; l >= 1; l--) {
-							errors[l] = ((weights[l+1]).transpose() * errors[l+1]).array() * 
-								sigmoid_prime(weighted_sums[l]).array();
-							total_change_bias[l] = total_change_bias[l] + (errors[l]);
-							total_change_weights[l] = total_change_weights[l] +
-								errors[l]*(outputs[l-1].transpose());
-						}
-					}
-
-					m_mutex.lock();
-					for (int l = 1; l < Size; l++) {
-						weights[l] = weights[l] - learning_rate * total_change_weights[l]; 
-						bias[l] = bias[l] - learning_rate * total_change_bias[l];
-					}
-					m_mutex.unlock();
-				}
-			}
-		}
-
-		/*std::size_t getContentsByteSize() {
-			std::size_t size = 0;
-			for (auto& mat : weights) {
-				size += mat.rows() * mat.cols() * sizeof(double);
-			}
-			for (auto& mat : bias) {
-				size += mat.rows() * mat.cols() * sizeof(double);
-			}
-			return size;
-		}*/
-		void serialize(const std::string& output_path = "output.json") {
-			nlohmann::json data;
-			data["weights"] = {};
-
-			int weight_id = 0;
-			for (auto& mat : weights) {
-				data["weights"][weight_id] = {};
-				auto& array = data["weights"][weight_id];
-				for (int i = 0; i < mat.rows(); i++) {
-					for (int j = 0; j < mat.cols(); j++) {
-						array.push_back(mat(i, j));
-					}
-				}
-				weight_id += 1;
-			}
-
-			int bias_id = 0;
-			data["bias"] = {};
-			for (auto& mat : bias) {
-				data["bias"][bias_id] = {};
-				auto& array = data["bias"][bias_id];
-				for (int i = 0; i < mat.rows(); i++) {
-					for (int j = 0; j < mat.cols(); j++) {
-						array.push_back(mat(i, j));
-					}
-				}
-				bias_id += 1;
-			}
-
-			std::ofstream o(output_path);
-			o << std::setw(4) << data << std::endl;
-
-		}
-
-		void deserialize(const std::string& path = "output.json") {
-			std::ifstream f(path);
-			nlohmann::json data;
-			f >> data;
-
-			for (unsigned int weight_id = 0; weight_id < data["weights"].size(); weight_id++) {
-				const auto& weightdata = data["weights"][weight_id];
-				for (int i = 0; i < weights[weight_id].rows(); i++) {
-					for (int j = 0; j < weights[weight_id].cols(); j++) {
-						weights[weight_id](i,j) = weightdata[i*weights[weight_id].cols() + j];
-					}
-				}
-			}
-			for (unsigned int bias_id = 1; bias_id < data["bias"].size(); bias_id++) {
-				const auto& biasdata = data["bias"][bias_id];
-				for (int i = 0; i < bias[bias_id].rows(); i++) {
-					for (int j = 0; j < bias[bias_id].cols(); j++) {
-						bias[bias_id](i,j) = biasdata[i*(bias[bias_id].cols()) + j];
-					}
-				}
-			}
-/*
-			const unsigned char* cursor = buffer.begin().base();
-			const unsigned char* end = buffer.end().base();
-			for (auto& mat : weights) {
-				cursor = Eigen::deserialize(cursor, end, mat);
-			}
-			for (auto& mat : bias) {
-				cursor = Eigen::deserialize(cursor, end, mat);
-			}
-			*/
-		}
-
-		std::mutex m_mutex;
-		std::array<MatrixXd, Size> weights;
-		std::array<MatrixXd, Size> bias;
-};
-
-std::vector<MatrixXd> load_labels(const std::string& path) {
+std::vector<double> load_labels(const std::string& path) {
 	std::ifstream file(path);
 	if (!file) {
 		throw std::runtime_error("labels file not found");
 	}
-	std::vector<double> _labels;
+	std::vector<double> labels;
 	for (double token; file >> token;) {
-		_labels.push_back(token);
-	}
-	std::vector<MatrixXd> labels;
-	labels.reserve(_labels.size());
-	for (size_t i = 0; i < _labels.size(); i++) {
-		MatrixXd tmp(1,1);
-		tmp(0,0) = _labels[i];
-		labels.push_back(tmp);
+		labels.push_back(token);
 	}
 	return labels;
 }
-std::vector<MatrixXd> load_input_vectors(const std::string& path) {
+
+std::vector<std::vector<double>> load_input_vectors(const std::string& path) {
 	std::ifstream file(path);
 	if (!file) {
 		throw std::runtime_error("file not found: " + path);
@@ -214,14 +28,12 @@ std::vector<MatrixXd> load_input_vectors(const std::string& path) {
 			value_vector.resize(known_size);
 			for (double value; iss >> value;) {
 				value_vector[row] = value;
-				//output[matrix](row, 0) = value;
 				row++;
 			}
 		}
 		else {
 			for (double value; iss >> value;) {
 				value_vector.push_back(value);
-				//output[matrix](row, 0) = value;
 				row++;
 			}
 			known_size = value_vector.size();
@@ -229,18 +41,53 @@ std::vector<MatrixXd> load_input_vectors(const std::string& path) {
 		assert(row == known_size);
 		vectors.push_back(value_vector);
 	}
-	std::vector<MatrixXd> output;
-	output.reserve(vectors.size());
-	for (size_t i = 0; i < vectors.size(); i++) {
-		output.emplace_back(known_size, 1);
-		for (size_t j = 0; j < known_size; j++) {
-			output[i](j,0) = vectors[i][j];
-		}
-	}
-	return output;
+	return vectors;
 }
 
-std::vector<MatrixXd> load_input_vectors();
+std::vector<std::pair<MatrixXd, MatrixXd>> load_data_shuffled() {
+	auto labels = load_labels("data/all_labels.txt");
+	std::vector<std::vector<double>> tfbs_and_energies;
+	{
+		//hi ha un balanç correcte
+		auto tfbs = load_input_vectors("data/all_tfbs.txt");
+		auto def_energies = load_input_vectors("data/all_def_energy.txt");
+
+		assert(tfbs.size() == def_energies.size());
+		assert(labels.size() == tfbs.size());
+		assert(tfbs[0].size() == def_energies[0].size());
+
+		rng.seed(std::chrono::system_clock::now().time_since_epoch().count());
+		for (size_t i = 0; i < def_energies.size(); i++) {
+			std::vector<double> concat_data;
+			concat_data.insert(concat_data.end(),
+									std::make_move_iterator(tfbs[i].begin()),
+									std::make_move_iterator(tfbs[i].end())
+			);
+			concat_data.insert(concat_data.end(),
+									std::make_move_iterator(def_energies[i].begin()),
+									std::make_move_iterator(def_energies[i].end())
+			);
+			std::shuffle(concat_data.begin(), concat_data.end(), rng);
+			tfbs_and_energies.push_back(std::move(concat_data));
+		}
+	}
+
+	std::vector<std::pair<MatrixXd, MatrixXd>> result;
+	result.reserve(tfbs_and_energies.size());
+	for (size_t i = 0; i < tfbs_and_energies.size(); i++) {
+	//	output.push_back(std::pair<MatrixXd, MatrixXd>(MatrixXd(entries_per_input_vector*2,1),MatrixXd(1,1)));
+		MatrixXd first(tfbs_and_energies.size(), 1);
+		//Mix descriptors
+		for (size_t j = 0; j < tfbs_and_energies[0].size(); j++) {
+			first(j,0) = tfbs_and_energies[i][j];
+		}
+		MatrixXd label_matrix (1,1);
+		label_matrix(0,0) = labels[i];
+		result.push_back(std::pair<MatrixXd, MatrixXd>(first,label_matrix));
+	}
+	return result;
+}
+
 std::vector<std::pair<MatrixXd, MatrixXd>> load_data() {
 	auto labels = load_labels("data/all_labels.txt");
 	//hi ha un balanç correcte
@@ -249,21 +96,53 @@ std::vector<std::pair<MatrixXd, MatrixXd>> load_data() {
 
 	assert(tfbs.size() == def_energies.size());
 	assert(labels.size() == tfbs.size());
-	assert(tfbs[0].rows() == def_energies[0].rows());
+	assert(tfbs[0].size() == def_energies[0].size());
 
 	std::vector<std::pair<MatrixXd, MatrixXd>> result;
 	result.reserve(tfbs.size());
 	for (size_t i = 0; i < tfbs.size(); i++) {
 	//	output.push_back(std::pair<MatrixXd, MatrixXd>(MatrixXd(entries_per_input_vector*2,1),MatrixXd(1,1)));
-		MatrixXd first(def_energies[0].rows() + tfbs[0].rows(), 1);
+		MatrixXd first(def_energies[0].size() + tfbs[0].size(), 1);
 		//Mix descriptors
-		for (long int j = 0; j < tfbs[0].rows(); j++) {
-			first(j,0) = tfbs[i](j,0);
+		for (size_t j = 0; j < tfbs[0].size(); j++) {
+			first(j,0) = tfbs[i][j];
 		}
-		for (long int j = 0; j < def_energies[0].rows(); j++) {
-			first(j+tfbs[0].rows(),0) = def_energies[i](j,0);
+		for (size_t j = 0; j < def_energies[0].size(); j++) {
+			first(j+tfbs[0].size(),0) = def_energies[i][j];
 		}
-		result.push_back(std::pair<MatrixXd, MatrixXd>(first,labels[i]));
+		MatrixXd label_matrix (1,1);
+		label_matrix(0,0) = labels[i];
+		result.push_back(std::pair<MatrixXd, MatrixXd>(first,label_matrix));
+	}
+	return result;
+}
+
+std::vector<std::pair<MatrixXd, MatrixXd>> load_data_energy_only() {
+	auto labels = load_labels("data/all_labels.txt");
+	//hi ha un balanç correcte
+	//auto tfbs = load_input_vectors("data/all_tfbs.txt");
+	auto def_energies = load_input_vectors("data/all_def_energy.txt");
+
+	//assert(tfbs.size() == def_energies.size());
+	//assert(labels.size() == tfbs.size());
+	//assert(tfbs[0].size() == def_energies[0].size());
+
+	std::vector<std::pair<MatrixXd, MatrixXd>> result;
+	result.reserve(def_energies.size());
+	for (size_t i = 0; i < def_energies.size(); i++) {
+	//	output.push_back(std::pair<MatrixXd, MatrixXd>(MatrixXd(entries_per_input_vector*2,1),MatrixXd(1,1)));
+		MatrixXd first(def_energies[0].size() + def_energies[0].size(), 1);
+		//Mix descriptors
+		//for (size_t j = 0; j < tfbs[0].size(); j++) {
+		//	first(j,0) = tfbs[i][j];
+		//}
+		for (size_t j = 0; j < def_energies[0].size(); j++) {
+			//first(j+tfbs[0].size(),0) = def_energies[i][j];
+			first(j,0) = def_energies[i][j];
+		}
+		MatrixXd label_matrix (1,1);
+		label_matrix(0,0) = labels[i];
+		result.push_back(std::pair<MatrixXd, MatrixXd>(first,label_matrix));
 	}
 	return result;
 }
@@ -316,17 +195,48 @@ int main(int argc, char** argv) {
 	/////////////////////////////////////////////////////////
 	//Test the network./////////////////////////////////////
 	int good = 0;
+	//NFR
+	int true_positive = 0;
+	int false_positive = 0;
+	//Non NFR
+	int true_negative = 0;
+	int false_negative = 0;
 	for (size_t i = 0; i < testing_data.size(); i++) {
 		auto output = network.feedforward(testing_data[i].first);
 		std::cout << std::round(output(0,0)) << " | " << testing_data[i].second(0,0) << '\n';
-		if (std::round(output(0,0)) == testing_data[i].second(0,0)) {
+		int rounded_output = std::round(output(0,0));
+		int expected_output = testing_data[i].second(0,0);
+		if (rounded_output == expected_output) {
+			if (rounded_output == 1) true_positive += 1;
+			if (rounded_output == 0) true_negative += 1;
 			good += 1;
+		}
+		else if (rounded_output < expected_output) {
+			false_negative += 1;
+		}
+		else if (rounded_output > expected_output) {
+			false_positive += 1;
 		}
 	}
 
-	std::cout << "Acurracy: " << (static_cast<double>(good)/testing_data.size())*100 << "%" << std::endl;
-	//If we have supplied the path to an image as a command line argument, use it as testing data as well./// 
+	std::cout << "Good: " << (static_cast<double>(good)/testing_data.size())*100 << "%" << std::endl;
+
+	std::cout <<  "true_positive: " << true_positive << std::endl;
+	std::cout <<  "false_positive: " << false_positive << std::endl;
+	std::cout <<  "true_negative: " << true_negative << std::endl;
+	std::cout <<  "false_negative: " << false_negative << std::endl;
+	std::cout << "Precision: " << (((double)true_positive)/((double)(true_positive + false_positive))) << std::endl;
+	std::cout << "Negative Predictive Value: " << (((double)true_negative)/((double)(true_negative + false_negative))) << std::endl;
+	std::cout << "Sensitivity: " << (((double)true_positive)/((double)(true_positive + false_negative))) << std::endl;
+	std::cout << "Specificity: " << (((double)true_negative)/((double)(true_negative + false_positive))) << std::endl;
+	std::cout << "Accurracy: " << (((double)true_positive + true_negative)/((double)(true_positive + true_negative + false_positive + false_negative))) << std::endl;
+
 	network.serialize(output_path);
 }
 
 //Confusion matrix
+//https://rapidminer.com/wp-content/uploads/2022/06/Confusion-Matrix-1.jpeg
+
+//Entrenar amb un arxiu i predir els altres
+//Les zones on hi ha un nucleosoma acostumen a presentar una periodicitat en la seqüència del DNA.
+/////Introduïr com a descriptor la seqüència genòmica
