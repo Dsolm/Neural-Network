@@ -89,10 +89,10 @@ std::vector<std::pair<MatrixXd, MatrixXd>> load_data_shuffled() {
 }
 
 std::vector<std::pair<MatrixXd, MatrixXd>> load_data() {
-	auto labels = load_labels("data/all_labels.txt");
+	auto labels = load_labels("data/labels_chrII_new.txt");
 	//hi ha un balanç correcte
-	auto tfbs = load_input_vectors("data/all_tfbs.txt");
-	auto def_energies = load_input_vectors("data/all_def_energy.txt");
+	auto tfbs = load_input_vectors("data/tfbs_chrII_new.txt");
+	auto def_energies = load_input_vectors("data/def_energy_chrII_new.txt");
 
 	assert(tfbs.size() == def_energies.size());
 	assert(labels.size() == tfbs.size());
@@ -118,11 +118,14 @@ std::vector<std::pair<MatrixXd, MatrixXd>> load_data() {
 }
 
 std::vector<std::pair<MatrixXd, MatrixXd>> load_data_energy_only() {
-	auto labels = load_labels("data/all_labels.txt");
+	auto labels = load_labels("data/all_labels_new.txt");
 	//hi ha un balanç correcte
-	//auto tfbs = load_input_vectors("data/all_tfbs.txt");
-	auto def_energies = load_input_vectors("data/all_def_energy.txt");
+	//auto tfbs = load_input_vectors("data/all_tfbs_new.txt");
+	auto def_energies = load_input_vectors("data/all_def_energy_new.txt");
 
+	/*
+	 * Amb els tts la predicció és pitjor perque els nfr que trobem al terminating site presenten un perfil menys definit que els del tss. Hi ha barreja de dades (el inici d'un es troba amb el final de un altre alguns cops)
+	 * */
 	//assert(tfbs.size() == def_energies.size());
 	//assert(labels.size() == tfbs.size());
 	//assert(tfbs[0].size() == def_energies[0].size());
@@ -166,7 +169,7 @@ int main(int argc, char** argv) {
 	}
 	if (std::string(argv[1]) == "train") {
 		//auto nthreads = std::thread::hardware_concurrency();
-		size_t nthreads = 6;
+		size_t nthreads = 4;
 		
 		std::vector<std::thread> threads;
 		size_t slice_size = training_data.size() / nthreads;
